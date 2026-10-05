@@ -143,7 +143,7 @@ foreach ($entry in $repositories) {
 }
 
 $state.nextCheckpoint = [int]$state.nextCheckpoint + 1
-$state.lastCheckpoint = $checkpoint
-$state.lastCheckpointAt = (Get-Date).ToString("o")
+$state | Add-Member -NotePropertyName lastCheckpoint -NotePropertyValue $checkpoint -Force
+$state | Add-Member -NotePropertyName lastCheckpointAt -NotePropertyValue (Get-Date).ToString("o") -Force
 Write-TaskState -TaskDirectory $taskDirectory -State $state
 Write-Host "Stable paired checkpoint pushed: $checkpoint"

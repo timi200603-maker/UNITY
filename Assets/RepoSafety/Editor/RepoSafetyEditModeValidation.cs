@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
 
@@ -15,6 +16,7 @@ public static class RepoSafetyEditModeValidation
         if (string.IsNullOrEmpty(resultsPath))
             throw new ArgumentException("A -testResults path is required.");
 
+        RequireSynchronousSuite();
         var runner = ScriptableObject.CreateInstance<TestRunnerApi>();
         var callbacks = ScriptableObject.CreateInstance<RepoSafetyTestCallbacks>();
         callbacks.runner = runner;
@@ -28,4 +30,29 @@ public static class RepoSafetyEditModeValidation
         UnityEngine.Object.DestroyImmediate(callbacks);
         UnityEngine.Object.DestroyImmediate(runner);
     }
+    // Unity's synchronous filter omits coroutine tests. Reject those explicitly
+    // rather than silently accepting a partially executed future suite.
+    private static void RequireSynchronousSuite()
+    {
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic ||
+                !Array.Exists(assembly.GetReferencedAssemblies(), item => item.Name == "nunit.framework"))
+                continue;
+            foreach (var type in assembly.GetTypes())
+                foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic |
+                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                    foreach (var attribute in method.GetCustomAttributesData())
+                    {
+                        string name = attribute.AttributeType.FullName;
+                        if (name == "UnityEngine.TestTools.UnityTestAttribute" ||
+                            name == "UnityEngine.TestTools.UnitySetUpAttribute" ||
+                            name == "UnityEngine.TestTools.UnityTearDownAttribute")
+                            throw new InvalidOperationException(
+                                "Coroutine test hooks require an asynchronous validation entry point: " +
+                                type.FullName + "." + method.Name);
+                    }
+        }
+    }
+
 }
