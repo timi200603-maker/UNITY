@@ -12,7 +12,7 @@ using UnityEngine;
 /// - 非阻塞 UDP；发送失败不阻塞姿态驱动；禁用/启用可重建 socket；退出时关闭。
 /// - 控制器缺失/禁用/IK 关闭时仍回传对应状态；序号由本组件每次发送递增（读取快照不改变序号）。
 /// </summary>
-[DefaultExecutionOrder(200)] // 晚于 FootPlantingController(150)，确保拿到本帧解算后的快照
+[DefaultExecutionOrder(1200)] // 晚于脚锁与深蹲计数，发送本帧状态
 public class FootIkUdpSender : MonoBehaviour
 {
     [Header("Target")]
@@ -22,6 +22,7 @@ public class FootIkUdpSender : MonoBehaviour
 
     [Header("Auto-link")]
     public FootPlantingController controller;   // 可指定；为空则自动 FindObjectOfType
+    public SquatAnalysisController analysis;
 
     private UdpClient _udp;
     private float _sendAccum;
@@ -36,6 +37,7 @@ public class FootIkUdpSender : MonoBehaviour
     {
         if (_udp != null) return;
         if (controller == null) controller = FindObjectOfType<FootPlantingController>();
+        if (analysis == null) analysis = FindObjectOfType<SquatAnalysisController>();
         try
         {
             _udp = new UdpClient();
@@ -83,6 +85,7 @@ public class FootIkUdpSender : MonoBehaviour
             ["seq"] = ++_seq,
             ["front_age_ms"] = Null(),
             ["squat"] = null,
+            ["squat_analysis"] = AnalysisToDict(),
         };
 
         if (controller == null)
@@ -102,6 +105,32 @@ public class FootIkUdpSender : MonoBehaviour
         msg["right"] = FootToDict(snap.right, snap.ikEnabled);
         msg["squat"] = SquatToDict();
         return Encode(msg);
+    }
+
+    Dictionary<string, object> AnalysisToDict()
+    {
+        if (analysis == null) return null;
+        var bridge = analysis.GetComponent<SquatDesktopBridge>();
+        return new Dictionary<string, object>
+        {
+            ["session"] = analysis.SessionId,
+            ["enabled"] = analysis.isActiveAndEnabled,
+            ["completed_repetitions"] = analysis.CompletedRepetitions,
+            ["phase"] = analysis.Phase.ToString(),
+            ["is_running"] = analysis.IsRunning,
+            ["valid_measurements"] = analysis.HasValidMeasurements,
+            ["left_flexion_deg"] = analysis.HasValidMeasurements ? Deg(analysis.EstimatedLeftFlexion) : null,
+            ["right_flexion_deg"] = analysis.HasValidMeasurements ? Deg(analysis.EstimatedRightFlexion) : null,
+            ["message"] = analysis.TrackingMessage,
+            ["baseline"] = analysis.driver != null && analysis.driver.BaselineEstablished,
+            ["control_ready"] = analysis.isActiveAndEnabled && bridge != null &&
+                bridge.isActiveAndEnabled && bridge.IsListening,
+            ["control_port"] = bridge != null ? bridge.BoundPort : 0,
+            ["control_error"] = bridge != null ? bridge.ConnectionError : "桌面控制组件缺失",
+            ["last_command_id"] = bridge != null ? bridge.LastCommandId : null,
+            ["last_command_success"] = bridge != null && bridge.LastCommandSucceeded,
+            ["last_command_message"] = bridge != null ? bridge.LastCommandMessage : null,
+        };
     }
 
     Dictionary<string, object> SquatToDict()

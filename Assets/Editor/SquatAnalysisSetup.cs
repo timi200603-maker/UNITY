@@ -44,6 +44,16 @@ public static class SquatAnalysisSetup
         controller.driver = driver;
         controller.receiver = driver.receiver;
         overlay.controller = controller;
+        var desktopBridge = driver.GetComponent<SquatDesktopBridge>();
+        if (desktopBridge == null) desktopBridge = Undo.AddComponent<SquatDesktopBridge>(driver.gameObject);
+        var sender = UnityEngine.Object.FindObjectOfType<FootIkUdpSender>(true);
+        if (sender == null) sender = Undo.AddComponent<FootIkUdpSender>(driver.gameObject);
+        Undo.RecordObjects(new UnityEngine.Object[] { desktopBridge, sender }, "Connect desktop squat controls");
+        desktopBridge.analysis = controller;
+        sender.analysis = controller;
+        sender.controller = driver.GetComponent<FootPlantingController>();
+        EditorUtility.SetDirty(desktopBridge);
+        EditorUtility.SetDirty(sender);
         EditorUtility.SetDirty(controller);
         EditorUtility.SetDirty(overlay);
         EditorSceneManager.MarkSceneDirty(driver.gameObject.scene);

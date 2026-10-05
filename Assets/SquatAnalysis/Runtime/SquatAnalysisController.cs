@@ -20,6 +20,8 @@ public sealed class SquatAnalysisController : MonoBehaviour
     [Range(0f, 180f)] public float minimumDepthFlexion = 45f;
     [Range(0f, 180f)] public float bottomFlexion = 65f;
 
+    private readonly string sessionId = Guid.NewGuid().ToString("N");
+    public string SessionId { get { return sessionId; } }
     private SquatCycleCounter counter;
     private int lastFrameId = int.MinValue;
     private double lastFrameTime = double.NaN;

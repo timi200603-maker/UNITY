@@ -354,6 +354,12 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1379038811}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1379038814}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1379038813}
     - targetCorrespondingSourceObject: {fileID: -4728426434207774260, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1249548577}
@@ -972,6 +978,37 @@ MonoBehaviour:
   startFlexion: 25
   minimumDepthFlexion: 45
   bottomFlexion: 65
+--- !u!114 &1379038813
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1379038805}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: eda3aa2b62ec0194eb9a87f4efc6340f, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  host: 127.0.0.1
+  port: 8890
+  sendHz: 10
+  controller: {fileID: 1379038810}
+  analysis: {fileID: 1379038812}
+--- !u!114 &1379038814
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1379038805}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 654f883f537a5a018775401f5b3cffe6, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  analysis: {fileID: 1379038812}
+  commandPort: 8891
 --- !u!1 &2000000000
 GameObject:
   m_ObjectHideFlags: 0
