@@ -67,6 +67,24 @@ public class HumanoidPoseDriver : MonoBehaviour
     public float squatDeadzone = 0.01f;            // 高度死区(m)
     [Tooltip("在 Inspector 勾选并手动触发一次“重新识别站立基准”")]
     public bool reidentifyBaseline = false;
+    [Tooltip("迈步时摆动腿屈膝会让该腿伸展量骤减；下降量取两腿的较小值（=更伸展的那条腿），避免骨盆被摆动腿拉低")]
+    public bool squatUseMostExtendedLeg = true;
+    [Tooltip("两腿伸展量差超过此值(m)视为单侧屈膝(迈步)，保持高度不更新")]
+    public float squatAsymmetryHold = 0.06f;
+    [Tooltip("连续多久拿不到可信的下蹲测量(s)就把下降量收回站立。真实下蹲时两脚不离地、置信度也不低，" +
+             "该计时恒被新测量刷新，不会触发；只有腿关键点崩塌(踝被算到髋之上)才超时自愈")]
+    public float squatTrustTimeout = 0.6f;
+
+    [Header("Gait Pelvis Bob / Sway (走路自然度)")]
+    [Tooltip("由 FootPlantingController 每帧写入的支撑权重驱动：支撑脚侧骨盆平移 + 双支撑期骨盆下沉")]
+    public bool enableGaitBob = true;
+    [Tooltip("骨盆左右摆动幅度(m)。单脚支撑时朝向支撑脚")]
+    public float gaitSwayAmplitude = 0.020f;
+    [Tooltip("双支撑期骨盆下沉幅度(m)。单脚支撑时回到基准高度")]
+    public float gaitBobAmplitude = 0.012f;
+    [Tooltip("由 FootPlantingController 写入的支撑权重（只读）")]
+    [Range(0f, 1f)] public float LeftSupportWeight;
+    [Range(0f, 1f)] public float RightSupportWeight;
 
     // 只读接口（供 FootPlantingController 等读取，避免各组件对同一帧不同判断）
     public bool BaselineEstablished { get; private set; }
@@ -119,6 +137,7 @@ public class HumanoidPoseDriver : MonoBehaviour
     private bool _plannedValid;                     // 是否已有有效计划脚位(非初始零)
     private float _leftConf, _rightConf;            // 左右腿置信度(分腿)
     private float _squatInvalidTime;                // 有效新帧之外累计的无效时长(s)
+    private float _squatTrustTime;                  // 距上次可信下蹲测量的时长(s)，超阈值收回站立
     private float _recoverTimer;                    // 恢复平滑(200ms)
     private bool _wasInvalid;                       // 上次是否处于无效/暂停
 
@@ -365,7 +384,7 @@ public class HumanoidPoseDriver : MonoBehaviour
             else
             {
                 SquareFailWhenDisabled();
-                RestoreHipsToBase();
+                SmoothAndApplySquat(Time.deltaTime); // 下蹲关闭时仍保留步态起伏/摆动
             }
             // 应用骨盆后再投影独立踝位（FootPlantingController 读到骨盆修正后的脚位）
             PlannedLeftAnkle = FKProjectAnkle(_leftUpperLegRig, _leftLowerLegRig,
@@ -578,7 +597,18 @@ public class HumanoidPoseDriver : MonoBehaviour
         }
         BaselineEstablished = _squatBaselineEstablished;
 
-        if (_squatBaselineEstablished && SquatDataValid)
+        // ★ 接地上门：nearGround 在上面的 570-571 行就算好了，但一直只喂给 standing
+        //   （见 575 行），没有进下面的目标写入条件。后果是致命的：
+        //   腿关键点崩塌时踝会被抬到髋之上（物理不可能），H 随之塌掉，dL/dR 变得极大，
+        //   于是 target 被 Clamp 顶到 maxDescent 上限（实测 45.49cm = 平均腿长×0.55）
+        //   并写进 _squatTargetDescent；此后 conf 掉到 0.30 以下走 637 行的「保持」分支
+        //   （那行只有注释、没有赋值），SquatPaused 又因 _squatInvalidTime 由「包是否到达」
+        //   驱动而永不触发，于是骨盆被永久钉低 45cm，全程无法自愈。
+        //   实测：本采集健康段 two-feet target.y<=0.30 成立 99.3%（摆动腿正常只抬 14cm），
+        //   加上这道门只影响 0.7% 的帧；而崩溃段能挡掉 44%，钉扎帧（t=77.395）两脚
+        //   分别在 0.756/0.931m 高空，当场拦下。语义上也正是对的：
+        //   只有两只脚都确实踩在地上，腿的伸展量才可以被解读为骨盆高度。
+        if (_squatBaselineEstablished && SquatDataValid && nearGround)
         {
             // 平均腿长 = (左大腿+左小腿+右大腿+右小腿) / 2
             float avgLegLen = (_leftThighLen + _leftShinLen + _rightThighLen + _rightShinLen) * 0.5f;
@@ -590,8 +620,20 @@ public class HumanoidPoseDriver : MonoBehaviour
             {
                 float dL = _H0 - _leftH;
                 float dR = _H0 - _rightH;
-                float wL = Mathf.Clamp01(lc), wR = Mathf.Clamp01(rc);
-                target = (dL * wL + dR * wR) / Mathf.Max(1e-4f, wL + wR);
+                // 走路时摆动腿必然屈膝（伸展量骤减），若像下蹲一样取两腿平均/相加，
+                // 每迈一步骨盆都会被拉低一次。真正下蹲是“两腿同时缩短”，
+                // 所以下降量取两者较小值 = 更伸展的那条腿决定高度。
+                if (squatUseMostExtendedLeg)
+                {
+                    target = Mathf.Min(dL, dR);
+                    if (Mathf.Abs(dL - dR) > squatAsymmetryHold)
+                        SquatLimitReason = "单侧屈膝(迈步)，取伸展腿";
+                }
+                else
+                {
+                    float wL = Mathf.Clamp01(lc), wR = Mathf.Clamp01(rc);
+                    target = (dL * wL + dR * wR) / Mathf.Max(1e-4f, wL + wR);
+                }
             }
             else
             {
@@ -602,12 +644,36 @@ public class HumanoidPoseDriver : MonoBehaviour
             target = Mathf.Clamp(target, 0f, maxDescent);
             if (target < squatDeadzone) target = 0f;
             _squatTargetDescent = target;
+            _squatTrustTime = 0f;                       // ★ 拿到可信测量，失效时钟清零
         }
         else if (!_squatBaselineEstablished)
         {
             _squatTargetDescent = 0f;
+            _squatTrustTime = 0f;
         }
-        // 否则：保持上一个 _squatTargetDescent（重复帧不重置为 0）
+        else
+        {
+            // ★ 保持上一个 _squatTargetDescent（重复帧不重置为 0）——但不能永久保持。
+            //   这段「保持」分支原先只有这一行注释、没有任何赋值，一旦有垃圾值被写进来
+            //   就再也出不去：实测腿关键点崩塌时踝会被算到髋之上（物理不可能），H 随之
+            //   塌掉，target 被 Clamp 顶到上限 45.49cm 并写进字段；随后 conf 掉到 0.30
+            //   以下、SquatDataValid 恒为 false，骨盆被钉死在半蹲姿态直到采集结束。
+            //   全程 SquatPaused 一次都没触发——因为 _squatInvalidTime 由「包是否到达」
+            //   驱动，而包一直在到（front_age_ms 最大 115ms），它压根不看数据质量。
+            //   这里补一个由**数据质量**驱动的失效时钟：连续 squatTrustTimeout 秒拿不到
+            //   可信测量，就把目标收回站立，交由 SmoothAndApplySquat 里既有的
+            //   squatMaxSpeed 限速平滑放下。真实下蹲（蹲住不动）两脚不离地、置信度也不低，
+            //   计时恒被上面的写入分支刷新——本采集健康段最长断流仅 0.254s，阈值 0.6s
+            //   有 2.4 倍余量，不会把真人误弹回站立。
+            //   ⚠️ 边界（刻意为之）：若包【完全停到】超过 0.25s，SquatPaused 会为真，
+            //   而 SmoothAndApplySquat 在暂停时是不做平滑的（保持最后高度）——此时本计时
+            //   虽把目标清成 0，骨盆却不会跟着动。这是有意保留的：包停了意味着输入整个
+            //   断了，原设计就是冻住而不是塌回站立，否则真实下蹲时丢 1 秒跟踪就会被弹
+            //   起来。包一恢复，上述两个分支立刻重新生效并自动纠正（计时值未被重置，
+            //   若恢复后的数据仍不可信，会当场继续走衰减）。
+            _squatTrustTime += Time.deltaTime;
+            if (_squatTrustTime > squatTrustTimeout) _squatTargetDescent = 0f;
+        }
 
         // 无效时长/暂停/恢复
         if (validData) _squatInvalidTime = 0f;
@@ -616,17 +682,26 @@ public class HumanoidPoseDriver : MonoBehaviour
         if (SquatPaused) _wasInvalid = true;
         else if (_wasInvalid) { _recoverTimer = 0.2f; _wasInvalid = false; }
         if (_recoverTimer > 0f) _recoverTimer = Mathf.Max(0f, _recoverTimer - Time.deltaTime);
+
+        // ★ 把内部目标同步到公开属性。此前 SquatTargetDescent 全文件只在
+        //   SquareFailWhenDisabled() 里被赋 0，内部逻辑写的一直是私有字段
+        //   _squatTargetDescent —— 于是日志里的 target_cm 恒为 0（四份采集、两万多帧，
+        //   非零次数为 0），整条「目标被顶到上限」的故障链因此完全不可观测，
+        //   只剩滞后的 actual_cm 能看，没法定位到帧。
+        //   唯一消费者是 FootIkUdpSender 的诊断日志，不影响任何控制逻辑。
+        SquatTargetDescent = _squatTargetDescent;
     }
 
-    /// <summary>每渲染帧：向缓存目标平滑，随后应用骨盆位置。</summary>
+    /// <summary>每渲染帧：向缓存目标平滑，随后应用骨盆位置。下蹲关闭时目标下降量恒为 0，仅保留步态起伏。</summary>
     void SmoothAndApplySquat(float dt)
     {
-        if (_squatBaselineEstablished)
+        float targetDescent = (enableSquat && _squatBaselineEstablished) ? _squatTargetDescent : 0f;
+        if (_squatBaselineEstablished || enableGaitBob)
         {
-            if (!SquatPaused)
+            if (!SquatPaused || !enableSquat)
             {
                 float a = 1f - Mathf.Exp(-dt / Mathf.Max(0.01f, squatSmoothTimeConst));
-                float smoothed = Mathf.Lerp(_smoothDescent, _squatTargetDescent, a);
+                float smoothed = Mathf.Lerp(_smoothDescent, targetDescent, a);
                 float maxStep = squatMaxSpeed * dt;
                 _smoothDescent = Mathf.MoveTowards(_smoothDescent, smoothed, maxStep);
             }
@@ -641,20 +716,44 @@ public class HumanoidPoseDriver : MonoBehaviour
     }
 
     /// <summary>将骨盘 Hips 沿世界竖直方向下移（单写入者；从基准局部位置计算，不逐帧累加；修正父缩放）。</summary>
+    /// <summary>
+    /// 骨盆世界偏移 = 下蹲下降 + 步态起伏/摆动。
+    /// 步态部分由 FootPlantingController 写入的支撑权重驱动：
+    ///   双支撑（两脚都在地上）→ 骨盆最低；单支撑 → 骨盆抬到基准高度并偏向支撑脚。
+    /// 注意：MeasureLeg 的伸展量 H 只由骨骼“方向”决定，不含髋位置，
+    ///       所以这里的骨盆偏移不会反过来改变下蹲判据（无自激反馈）。
+    /// </summary>
     void ApplyPelvisOffset()
     {
         if (!_hipsBaseCaptured || _hips == null || _hipsParent == null) return;
-        if (_squatBaselineEstablished)
-        {
-            // 目标世界位置 = 基准世界位置 + 世界向下 × DescentMeters → 转回父局部（正确处理父缩放/旋转/平移）
-            Vector3 baseWorld = _hipsParent.TransformPoint(_hipsBaseLocalPos);
-            Vector3 targetWorld = baseWorld + Vector3.down * DescentMeters;
-            _hips.localPosition = _hipsParent.InverseTransformPoint(targetWorld);
-        }
-        else
+        if (!_squatBaselineEstablished && !enableGaitBob)
         {
             RestoreHipsToBase();
+            return;
         }
+
+        Vector3 baseWorld = _hipsParent.TransformPoint(_hipsBaseLocalPos);
+        Vector3 offsetWorld = Vector3.down * Mathf.Max(0f, _smoothDescent);
+
+        if (enableGaitBob)
+        {
+            float wl = Mathf.Clamp01(LeftSupportWeight);
+            float wr = Mathf.Clamp01(RightSupportWeight);
+            if (wl > 0.01f || wr > 0.01f)
+            {
+                // 摆动：骨盆朝支撑脚一侧平移（双脚支撑时差值≈0，自然回到中线）
+                float sway = (wr - wl) * gaitSwayAmplitude;
+                Vector3 right = _hips.rotation * Vector3.right;
+                right.y = 0f;
+                if (right.sqrMagnitude > 1e-6f) right.Normalize();
+                offsetWorld += right * sway;
+                // 起伏：双支撑期最低（重心在两脚之间），单支撑期回到基准
+                offsetWorld += Vector3.down * (Mathf.Min(wl, wr) * gaitBobAmplitude);
+            }
+        }
+
+        Vector3 targetWorld = baseWorld + offsetWorld;
+        _hips.localPosition = _hipsParent.InverseTransformPoint(targetWorld);
     }
 
     void SquareFailWhenDisabled()

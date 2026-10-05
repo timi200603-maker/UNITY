@@ -11,7 +11,12 @@ using System.Collections.Generic;
 ///   1. 挂载到 Avatar Root GameObject 上
 ///   2. 拖入 DualCameraRootEstimator 引用
 ///   3. 运行，按 C 校准，人物走动时角色跟随移动
+///
+/// 执行顺序 -20：本组件必须早于 HumanoidPoseDriver(0) 移动根节点。
+/// 否则姿态计划用的是“移动前”的根位置，计划踝位会带上 v×dt 的系统性偏移，
+/// 落脚点整体偏短，脚锁锚点也跟着偏。顺序改为“整体位移 → 姿态计划 → 脚锁”。
 /// </summary>
+[DefaultExecutionOrder(-20)]
 public class AvatarRootFollower : MonoBehaviour
 {
     [Header("References")]

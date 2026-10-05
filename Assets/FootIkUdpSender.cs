@@ -23,14 +23,68 @@ public class FootIkUdpSender : MonoBehaviour
     [Header("Auto-link")]
     public FootPlantingController controller;   // 可指定；为空则自动 FindObjectOfType
 
+    [Header("Capture to file (排查用，默认关闭)")]
+    [Tooltip("把同一份诊断 JSON 逐包追加到 captureDir/footlog.jsonl。"
+           + "8890 端口可能已被桌面监看占用，落盘不依赖任何监听器先启动，排查更稳。")]
+    public bool enableCapture = false;
+    [Tooltip("落盘目录。留空则写到 Application.persistentDataPath/footlog。"
+           + "只用 ASCII 路径——cv2/文件 API 对非 ASCII 路径会静默失败")]
+    public string captureDir = "";
+
     private UdpClient _udp;
     private float _sendAccum;
     private int _seq;
+    private System.IO.StreamWriter _cap;
+    private string _capPath;
+    private int _capLines;
 
-    void OnEnable() { InitSocket(); }
-    void OnDisable() { CloseSocket(); }
-    void OnDestroy() { CloseSocket(); }
-    void OnApplicationQuit() { CloseSocket(); }
+    void OnEnable()
+    {
+        // 10Hz 对步态排查太粗：vEvidenceTime/stepDevTime 只有 0.06s，一个采样间隔就跨过去了，
+        // 证据计时器怎么涨起来的完全看不见。提到 50Hz（≈每 20ms 一包）。
+        if (sendHz < 40f)
+        {
+            Debug.LogWarning($"[FootIkUdp] sendHz={sendHz:F0} 过粗（0.06s 级的证据计时器看不见）→ 提升为 50Hz。");
+            sendHz = 50f;
+        }
+        InitSocket();
+        InitCapture();
+    }
+    void OnDisable() { CloseSocket(); CloseCapture(); }
+    void OnDestroy() { CloseSocket(); CloseCapture(); }
+    void OnApplicationQuit() { CloseSocket(); CloseCapture(); }
+
+    void InitCapture()
+    {
+        if (!enableCapture || _cap != null) return;
+        // captureDir 留空时落到 Unity 的持久化目录，避免把任何人的本机路径写进仓库
+        string dir = string.IsNullOrEmpty(captureDir)
+            ? System.IO.Path.Combine(Application.persistentDataPath, "footlog")
+            : captureDir;
+        try
+        {
+            if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+            // 每次进 Play 新建一个文件，避免和上一轮的记录混在一起
+            _capPath = System.IO.Path.Combine(dir,
+                $"footlog_{System.DateTime.Now:MMdd_HHmmss}.jsonl");
+            _cap = new System.IO.StreamWriter(_capPath, false, System.Text.Encoding.UTF8);
+            _capLines = 0;
+            Debug.Log($"[FootIkUdp] 诊断落盘 → {_capPath}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[FootIkUdp] 落盘初始化失败（{dir}）: {ex.Message}");
+            _cap = null;
+        }
+    }
+
+    void CloseCapture()
+    {
+        if (_cap == null) return;
+        try { _cap.Flush(); _cap.Close(); _cap.Dispose(); } catch { }
+        _cap = null;
+        if (_capPath != null) Debug.Log($"[FootIkUdp] 落盘结束：{_capLines} 行 → {_capPath}");
+    }
 
     void InitSocket()
     {
@@ -64,13 +118,25 @@ public class FootIkUdpSender : MonoBehaviour
         if (_sendAccum < interval) return;
         _sendAccum = 0f;
 
-        byte[] payload = BuildPayload();
-        if (payload == null) return;
+        string json = BuildJson();
+        if (json == null) return;
+        byte[] payload = System.Text.Encoding.UTF8.GetBytes(json);
         try { _udp.Send(payload, payload.Length); }
         catch (Exception) { /* 发送失败不阻塞 */ }
+
+        if (_cap != null)
+        {
+            try
+            {
+                _cap.WriteLine(json);
+                _capLines++;
+                if ((_capLines & 15) == 0) _cap.Flush();   // 每 16 行刷一次，20ms 一行 ≈ 0.32s
+            }
+            catch (Exception) { CloseCapture(); }
+        }
     }
 
-    byte[] BuildPayload()
+    string BuildJson()
     {
         var msg = new Dictionary<string, object>
         {
@@ -81,6 +147,8 @@ public class FootIkUdpSender : MonoBehaviour
             ["published"] = false,
             ["session"] = controller != null ? controller.GetDiagnostics().session : "-",
             ["seq"] = ++_seq,
+            ["t"] = System.Math.Round(Time.realtimeSinceStartupAsDouble, 4),   // 落盘/分析用的时间轴
+            ["fps"] = System.Math.Round(1.0 / Mathf.Max(Time.deltaTime, 1e-4f), 1),
             ["front_age_ms"] = Null(),
             ["squat"] = null,
         };
@@ -133,6 +201,11 @@ public class FootIkUdpSender : MonoBehaviour
         d["limit_reason"] = (controller != null && controller.reachLimited)
             ? controller.reachReason
             : pd.SquatLimitReason;
+        // ★ 上面那行在 controller.reachLimited 时会被子控制器的 reachReason 整个顶掉，
+        //   下蹲自己的 SquatLimitReason 就看不见了（实测本采集 620 帧被吞，占 19.5%，
+        //   而「单脚支撑，保持高度」这个分支全段一次都没露过面）。这里单独留一份，
+        //   不改上面那行的优先序，向下兼容既有分析脚本。
+        d["squat_limit_reason"] = pd.SquatLimitReason;
         d["paused"] = pd.SquatPaused;
         d["valid"] = pd.SquatDataValid;
         return d;
@@ -144,6 +217,9 @@ public class FootIkUdpSender : MonoBehaviour
         {
             ["status"] = ikEnabled ? d.status : "—",
             ["reason"] = ikEnabled ? d.releaseReason : "IK 已关闭",
+            ["phase"] = ikEnabled ? d.phase : "—",
+            ["pitch_deg"] = ikEnabled ? Deg(d.pitchDeg) : Null(),
+            ["slide_cms"] = ikEnabled && d.hasAnchor ? Cms(d.slideSpeed) : Null(),
             ["has_anchor"] = d.hasAnchor && ikEnabled,
             ["anchor_id"] = d.hasAnchor && ikEnabled ? d.anchorId : (object)null,
             ["planted"] = ikEnabled ? R3(d.planted) : (object)null,
@@ -155,9 +231,35 @@ public class FootIkUdpSender : MonoBehaviour
             ["unreach"] = d.unreach && ikEnabled,
             ["unreach_ms"] = ikEnabled ? Ms(d.unreachTimeAcc) : (object)null,
             ["contact"] = d.contact && ikEnabled,
+            // ── v5：定位滑步到底出在「锚点没诞生」还是「锚点诞生但够不到」──
+            ["h_speed_cms"] = ikEnabled ? Cms(d.hSpeed) : Null(),
+            ["cand_time_ms"] = ikEnabled ? Ms(d.candTime) : (object)null,
+            ["cand_count"] = ikEnabled ? (object)d.candCount : null,
+            ["cand_low"] = d.candLow && ikEnabled,
+            ["cand_slow"] = d.candSlow && ikEnabled,
+            ["cand_ground"] = d.candGround && ikEnabled,   // v6 触地判据
+            ["v_speed_cms_signed"] = ikEnabled ? Cms(d.vSpeed) : Null(),
+            ["win_span_ms"] = ikEnabled ? Ms(d.winSpan) : (object)null,
+            ["win_drop"] = d.winDrop,
+            ["win_dup"] = d.winDup,
+            ["leg_reach_cm"] = Cm(d.legReach),
+            ["servo_corr_mm"] = ikEnabled ? Math.Round(d.servoCorr * 1000f, 2) : (object)null,
+            ["anchor"] = d.hasAnchor ? Vec(d.anchor) : null,
+            ["foot"] = Vec(d.footPos),
+            ["target"] = Vec(d.target),
+            ["root"] = Vec(d.rootPos),
+            ["hip"] = Vec(d.hipPos),
         };
         return dict;
     }
+
+    static object Vec(UnityEngine.Vector3 v) =>
+        new Dictionary<string, object>
+        {
+            ["x"] = Math.Round(v.x, 4),
+            ["y"] = Math.Round(v.y, 4),
+            ["z"] = Math.Round(v.z, 4),
+        };
 
     static object Cm(float m) => float.IsFinite(m) ? Math.Round(m * 100f, 1) : Null();
     static object Cms(float ms) => float.IsFinite(ms) ? Math.Round(ms * 100f, 1) : Null();
@@ -168,16 +270,9 @@ public class FootIkUdpSender : MonoBehaviour
     static object Fnum(float v, int digits) => float.IsFinite(v) ? Math.Round(v, digits) : Null();
     static object Null() => null;
 
-    byte[] Encode(Dictionary<string, object> msg)
+    string Encode(Dictionary<string, object> msg)
     {
-        try
-        {
-            string json = JsonConvert.SerializeObject(msg);
-            return System.Text.Encoding.UTF8.GetBytes(json);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
+        try { return JsonConvert.SerializeObject(msg); }
+        catch (Exception) { return null; }
     }
 }
