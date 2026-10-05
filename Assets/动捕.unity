@@ -348,6 +348,12 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1379038810}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1379038812}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1379038811}
     - targetCorrespondingSourceObject: {fileID: -4728426434207774260, guid: c4e1bd3184f15764b8adb8a1c7fd5dc4, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1249548577}
@@ -881,7 +887,18 @@ MonoBehaviour:
   RightFootPlanned: {x: 0, y: 0, z: 0, w: 0}
   LeftFootPlannedValid: 0
   RightFootPlannedValid: 0
+  enableSquat: 1
+  boardY: 0
+  squatRecognizeTime: 0.6
+  squatMinVisibility: 0.65
+  squatKneeAngleMin: 165
+  squatMaxDescentRatio: 0.55
+  squatSmoothTimeConst: 0.05
+  squatMaxSpeed: 1.5
+  squatDeadzone: 0.01
+  reidentifyBaseline: 0
   showBoneWarnings: 1
+  showSquatOverlay: 1
 --- !u!114 &1379038810
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -901,12 +918,16 @@ MonoBehaviour:
   ankleOffset: 0.08
   plantHeightMax: 0.3
   plantSpeedMax: 0.5
-  exitSpeedMax: 0.9
-  clearLiftHeight: 0.42
   minPlantTime: 0.12
-  swingDebounce: 0.06
+  riseThreshold: 0.14
+  liftVSpeed: 0.25
+  vEvidenceRise: 0.03
+  vEvidenceTime: 0.06
+  stepDev: 0.15
+  stepDevTime: 0.06
+  unreachTolerance: 0.02
+  unreachTime: 0.15
   plantEntryRate: 8
-  plantExitRateNormal: 20
   plantExitRateFast: 80
   swingLowpassTimeConst: 0.05
   reachMargin: 0.002
@@ -915,6 +936,42 @@ MonoBehaviour:
   vSpeedDeadzone: 0.05
   showOverlay: 1
   logDiagnostics: 0
+  reachLimited: 0
+  reachReason:
+--- !u!114 &1379038811
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1379038805}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 87f7cf5cb99c562bae86dd9c278e031e, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  controller: {fileID: 1379038812}
+  showPanel: 1
+--- !u!114 &1379038812
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1379038805}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fbe4068e67e7588296ff0c23e6e97081, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  driver: {fileID: 1379038808}
+  receiver: {fileID: 765940728}
+  minimumLegConfidence: 0.65
+  maximumPacketAgeMs: 250
+  standingFlexion: 15
+  startFlexion: 25
+  minimumDepthFlexion: 45
+  bottomFlexion: 65
 --- !u!1 &2000000000
 GameObject:
   m_ObjectHideFlags: 0

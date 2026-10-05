@@ -22,7 +22,7 @@ $repositories = @(
 )
 
 foreach ($entry in $repositories) {
-    $branch = (Invoke-Git -Repository $entry.Worktree -Arguments @(
+    $branch = @(Invoke-Git -Repository $entry.Worktree -Arguments @(
         "symbolic-ref", "--short", "HEAD"
     ))[0].Trim()
     if ($branch -ne [string]$state.branch) {
@@ -42,8 +42,8 @@ if (-not $Wip) {
         "-batchmode",
         "-nographics",
         "-projectPath", ('"' + [string]$state.unityWorktree + '"'),
-        "-runTests",
-        "-testPlatform", "EditMode",
+        "-executeMethod", "RepoSafetyEditModeValidation.Run",
+        "-quit",
         "-testResults", ('"' + $unityResults + '"'),
         "-logFile", ('"' + $unityLog + '"')
     )
@@ -116,10 +116,10 @@ $number = ([int]$state.nextCheckpoint).ToString("00")
 $checkpoint = "checkpoint/$($state.taskId)-$number"
 
 foreach ($entry in $repositories) {
-    $head = (Invoke-Git -Repository $entry.Worktree -Arguments @("rev-parse", "HEAD"))[0].Trim()
+    $head = @(Invoke-Git -Repository $entry.Worktree -Arguments @("rev-parse", "HEAD"))[0].Trim()
     & git -C $entry.Worktree show-ref --verify --quiet "refs/tags/$checkpoint"
     if ($LASTEXITCODE -eq 0) {
-        $tagHead = (Invoke-Git -Repository $entry.Worktree -Arguments @(
+        $tagHead = @(Invoke-Git -Repository $entry.Worktree -Arguments @(
             "rev-list", "-n", "1", $checkpoint
         ))[0].Trim()
         if ($tagHead -ne $head) {
