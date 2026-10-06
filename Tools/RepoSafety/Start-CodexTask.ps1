@@ -57,7 +57,7 @@ foreach ($entry in $repositories) {
 }
 
 foreach ($entry in $repositories) {
-    $head = (Invoke-Git -Repository $entry.Worktree -Arguments @("rev-parse", "HEAD"))[0].Trim()
+    $head = @(Invoke-Git -Repository $entry.Worktree -Arguments @("rev-parse", "HEAD"))[0].Trim()
     [void](Invoke-Git -Repository $entry.Worktree -Arguments @(
         "tag", "-a", $baselineTag, $head, "-m", "Baseline for paired task $taskId"
     ))
